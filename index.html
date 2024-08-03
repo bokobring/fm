@@ -29,6 +29,18 @@
             color: #dc3545;
             font-weight: bold;
         }
+        #log-area {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 200px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -63,6 +75,7 @@
             </div>
             <div id="message" class="mt-3 text-center"></div>
         </div>
+        <div id="log-area" class="mt-3"></div>
         <p class="disclaimer text-center">
             这是一个非物理实验室官方的网页版作品封面更换器，由复兴物实部署。系统安全措施较简单，如造成任何账户问题，作者实在无法负责。
             <a href="https://dl.turtlesim.com/plc/?chinese-discussion-66a3e3139e258e6b2f5294e5" target="_blank">改编来源</a>
@@ -70,14 +83,30 @@
     </div>
 
     <script>
+        const logArea = document.getElementById('log-area');
+
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logArea.textContent += `[${timestamp}] ${message}\n`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        console.log = log;
+        console.error = (message) => log(`错误: ${message}`);
+
         function randomDeviceId() {
             return Array.from({length: 40}, () => Math.floor(Math.random() * 16).toString(16)).join('');
         }
 
         async function gzipEncode(data) {
-            const jsonString = JSON.stringify(data);
-            const uint8Array = new TextEncoder().encode(jsonString);
-            return pako.gzip(uint8Array);
+            try {
+                const jsonString = JSON.stringify(data);
+                const uint8Array = new TextEncoder().encode(jsonString);
+                return pako.gzip(uint8Array);
+            } catch (error) {
+                console.error('GZIP encode error: ' + error.message);
+                throw error;
+            }
         }
 
         async function apiRequest(url, data, token = null, authcode = null) {
@@ -90,12 +119,23 @@
                 headers['x-API-Token'] = token;
                 headers['x-API-AuthCode'] = authcode;
             }
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: headers,
-                body: await gzipEncode(data)
-            });
-            return await response.json();
+            try {
+                console.log(`Sending request to ${url}`);
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: headers,
+                    body: await gzipEncode(data)
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const responseData = await response.json();
+                console.log(`Response from ${url}: `, JSON.stringify(responseData));
+                return responseData;
+            } catch (error) {
+                console.error('API request error: ' + error.message);
+                throw error;
+            }
         }
 
         async function login(email, password) {
@@ -130,11 +170,22 @@
             formData.append('authorization', authorization);
             formData.append('file', file, 'temp.jpg');
 
-            const response = await fetch('http://v0.api.upyun.com/qphysics', {
-                method: 'POST',
-                body: formData
-            });
-            return await response.json();
+            try {
+                console.log('Uploading file...');
+                const response = await fetch('http://v0.api.upyun.com/qphysics', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const responseData = await response.json();
+                console.log('Upload response: ', JSON.stringify(responseData));
+                return responseData;
+            } catch (error) {
+                console.error('Upload error: ' + error.message);
+                throw error;
+            }
         }
 
         document.getElementById('change-cover-form').addEventListener('submit', async function(e) {
@@ -153,23 +204,30 @@
             progressBar.classList.remove('d-none');
 
             try {
+                console.log('开始处理封面更换请求...');
+
                 // 登录
+                console.log('尝试登录...');
                 const loginResult = await login(email, password);
                 if (loginResult.Status !== 200) {
                     throw new Error('登录失败: ' + loginResult.Message);
                 }
                 const token = loginResult.Token;
                 const authcode = loginResult.AuthCode;
+                console.log('登录成功');
 
                 // 获取实验简介
+                console.log('获取实验简介...');
                 const summaryJson = await getSummary(token, authcode, contentId, category);
                 if (summaryJson.Status !== 200) {
                     throw new Error(summaryJson.Message);
                 }
                 const summary = summaryJson.Data;
                 if ('$type' in summary) delete summary['$type'];
+                console.log('获取实验简介成功');
 
                 // 更新实验
+                console.log('更新实验...');
                 const submit = {
                     Request: {
                         FileSize: -file.size,
@@ -181,25 +239,32 @@
                 if (submitJson.Status !== 200) {
                     throw new Error(submitJson.Message);
                 }
+                console.log('更新实验成功');
 
                 // 上传
+                console.log('上传新封面...');
                 const policy = submitJson.Data.Token.Policy;
                 const authorization = submitJson.Data.Token.Authorization;
                 const uploadResult = await upload(file, policy, authorization);
                 if ('error' in uploadResult) {
                     throw new Error(uploadResult.message);
                 }
+                console.log('上传新封面成功');
 
                 // 更新图片序号
+                console.log('更新图片序号...');
                 summary.Image += 1;
                 const updateImageJson = await submitExperiment(token, authcode, {Summary: summary});
                 if (updateImageJson.Status !== 200) {
                     throw new Error(updateImageJson.Message);
                 }
+                console.log('更新图片序号成功');
 
                 messageElement.textContent = '封面更换成功';
                 messageElement.classList.add('text-success');
+                console.log('封面更换完成');
             } catch (error) {
+                console.error('封面更换过程中发生错误: ' + error.message);
                 messageElement.textContent = '错误: ' + error.message;
                 messageElement.classList.add('error-message');
             } finally {
